@@ -18,7 +18,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.70';
+our $VERSION = '0.71';
 
 # Prints debug messages
 sub debug { # {{{
@@ -33,15 +33,20 @@ sub debug { # {{{
 	}
 } # }}}
 
+# Generates random letters
+sub random_letters { # {{{
+	my ($count) = shift;
+	my @pool = ("a".."z");
+	my $str;
+	$str .= $pool[rand int $#pool] for 1..$count;
+	return $str;
+} # }}}
+
 # Generates Vypress Chat header used to mark its packets.
 # Returns \x58 and nine random letters.
 sub header { # {{{
 	# 0x58 - Vypress Chat
-	my $str = "\x58";
-	# Random packet id
-	my @pool = ("a".."z");
-	$str .= $pool[rand int $#pool] for 1..9;
-	return $str;
+	return "\x58".random_letters(9);
 } # }}}
 
 # i_am_here($updater)
@@ -68,7 +73,7 @@ sub msg_ack { # {{{
 	my $str = header()."7".$self->{'users'}{$self->{'nick'}}{'status'}.$to."\0"
 		.$self->{'nick'}."\0".$self->{'users'}{$self->{'nick'}}{'gender'}
 		.$self->{'users'}{$self->{'nick'}}{'autoanswer'}."\0";
-	$self->{'send'}->send($str);
+	$self->usend($str, $to);
 	$self->debug("F: msg_ack(), To: $to", $str);
 } # }}}
 
@@ -243,7 +248,8 @@ Module has these methods:
 
 =head2 new()
 
-Initialises new instance of module. Sets these variables:
+Initialises new instance of module. Sets these variables (if not explained: 
+0 - off, 1 - on):
 
 =over
 
@@ -265,27 +271,7 @@ Initialises new instance of module. Sets these variables:
 
 =item send_info - automaticaly send info about this client. Default: 1
 
-=over
-
-=item *
-0 - not active;
-
-=item *
-1 - active;
-
-=back
-
 =item sign_topic - automaticaly sign topic. Default: 1
-
-=over
-
-=item *
-0 - not active;
-
-=item *
-1 - active;
-
-=back
 
 =item gender - current gender.
 Is not used, but it is in protocol. Also it seems that Vypress Chat 1.9 has
@@ -354,15 +340,9 @@ be warned in console. Also $vyc->{badip} variable will be set to 1.
 - toggles sending thru broadcast socket when unicast socket fails (ip cannot be
 found). Default: 1.
 
-=over
-
-=back
-
-=item *
-0 - drop packet.
-
-=item *
-1 - send packet thru broadcast socket instead of unicast.
+=item coll_avoid
+- toggle nick collision evasion. If someone changes nick to your nickname 
+modules will prepend number. Default: 1.
 
 =back
 
@@ -379,9 +359,11 @@ sub new { # {{{
 	my @vars = qw(send listen init);
 	$self->{$_} = undef for (@vars);
 	$self->{nick} = "default";
+	$self->{oldnick} = "";
 	$self->{port} = $args{port} || 8167;
 	$self->{debug} = $args{debug} || 0;
-	$self->{uc_fail} = $args{uc_fail} || 1;
+	$self->{uc_fail} = (defined $args{uc_fail}) ? $args{uc_fail} : 1;
+	$self->{coll_avoid} = (defined $args{coll_avoid}) ? $args{coll_avoid} : 1;
 	$self->{send_info} = (defined $args{send_info}) ? $args{send_info} : 1;
 	$self->{sign_topic} = (defined $args{sign_topic}) ? $args{sign_topic} : 1;
 	$self->{host} = $args{host} || hostname();
@@ -465,7 +447,10 @@ E.g.: $vyc->nick("SimpleGuy");
 
 sub nick { # {{{
 	my ($self, $nick) = @_;
-	unless ($self->{'nick'} eq $nick) {
+	if ($self->on_userlist($nick)) {
+		$self->debug("F: nick, Nick: $nick, Err: exists.");
+	}
+	elsif ($self->{'nick'} ne $nick) {
 		my $oldnick = $self->{'nick'};
 		
 		# Protocol doesn't allow nicks longer than 20 chars.
@@ -481,6 +466,8 @@ sub nick { # {{{
 		
 		# If we are connected to net announce nick change.
 		if (defined $self->{'send'} && $self->{init}) {
+			$self->{oldnick} = $oldnick;
+			
 			my $str = header()."3".$oldnick."\0".$self->{'nick'}."\0"
 			  .$self->{'users'}{$self->{'nick'}}{'gender'};
 			$self->{'send'}->send($str);
@@ -661,8 +648,14 @@ sub join { # Join to channel {{{
 		my $str = header()."4".$self->{'nick'}."\0".$chan."\0"
 			.$self->{'users'}{$self->{'nick'}}{'status'}
 			.$self->{'users'}{$self->{'nick'}}{'gender'};
-		$self->usend_chan($str, $chan);
+#		if ($chan eq '#Main') {
+			$self->{send}->send($str);
+#		}
+#		else {
+#			$self->usend_chan($str, $chan);
+#		}
 		$self->add_to_channel($self->{nick}, $chan);
+		$self->{last_joined_chan} = $chan;
 		$self->debug("F: join(), Chan: $chan", $str);
 	}
 	else {
@@ -895,8 +888,6 @@ If you turn off send_info variable (see new()) module won't send
 any information automatically. Then you can access this method to
 generate answer for information request.
 
-=head3 channels
-
 Channels variable can have these values:
 
 =over
@@ -1054,6 +1045,7 @@ sub startup { # {{{
 		PeerPort => $self->{'port'},
 		Proto	=> 'udp',
 		LocalAddr => $self->{'localip'},
+		Type => SOCK_DGRAM,
 		Broadcast => 1 ) || croak ("Failed! ($!)");
 	$self->debug("Success.");
 	# Outgoing unicast port.
@@ -1062,6 +1054,7 @@ sub startup { # {{{
 	$self->{'usend'} = IO::Socket::INET->new(
 		PeerPort => $self->{'port'},
 		Proto	=> 'udp',
+		Type => SOCK_DGRAM,
 		LocalAddr => $self->{'localip'}
 		) || croak ("Failed! ($!)");
 	$self->debug("Success.");
@@ -1072,9 +1065,12 @@ sub startup { # {{{
 	$self->{'listen'} = IO::Socket::INET->new (
 #		LocalAddr => $self->{'localip'},
 		LocalPort => $self->{'port'},
-		ReuseAddr => 1,
+		ReuseAddr => 0,
+		Type => SOCK_DGRAM,
+#		Listen => 1,
 		Proto	=> 'udp') || croak ("Failed! ($!)");
 	$self->debug("Success.");
+
 	# We'll use this later to check if we're on the net.
 	$self->{'init'} = 1;
 	# We gotta be on #Main all the time ;-)
@@ -1092,13 +1088,15 @@ E.g.: $vyc->shutdown();
 
 sub shutdown { # {{{
 	my $self = shift;
-	$self->part($_) for keys %{$self->{'channels'}};
+	$self->part($_) for $self->get_chans($self->{nick});
 	# Close sockets
 	$self->{'listen'}->close();
 	$self->{'send'}->close();
+	$self->{'usend'}->close();
 	# Undef sockets
 	undef $self->{'listen'};
 	undef $self->{'send'};
+	undef $self->{'usend'};
 	# We'll use this later to check if we're on the net.
 	$self->{'init'} = 0;
 } # }}}
@@ -1229,14 +1227,15 @@ Returns type of command and its arguments. Also executes actions when needed.
 Values are returned in array. First value will always be type of command.
 Other values may differ. Possible values are:
 
-=over
-
 =cut
 
 sub recognise {
 	my ($self, $buffer, $ip) = @_;
 	my @re;
-	if ($buffer !~ /^\x58.{9}/) {
+	if ($buffer eq 'IPTEST') {
+		return $ip;
+	}
+	elsif ($buffer !~ /^\x58.{9}/) {
 		return ("badpckt");		
 	}
 	else {
@@ -1245,7 +1244,7 @@ sub recognise {
 	my @args = split /\0/, substr $buffer, 11;
 	my $pkttype = substr $buffer, 10, 1;
 
-=item who is here
+=head4 who is here
 
 Returns: "who", $updater.
 
@@ -1259,14 +1258,14 @@ Returns: "who", $updater.
 		@re = ("who", $updater);
 	} # }}}
 
-=item I am here
+=head4 I am here
 
 Returns: "who_ack", $from, $status, $active
 
 =cut
 
 	# I'm here
-	elsif ($pkttype eq '1') { # {{{
+	if ($pkttype eq '1') { # {{{
 		my ($updater, $responder, $statusactive) = @args;
 		my ($status, $active) = split //, $statusactive;
 		if (($updater eq $self->{'nick'}) && 
@@ -1287,71 +1286,99 @@ Returns: "who_ack", $from, $status, $active
 		}
 	} # }}}
 
-=item channel chat
+=head4 channel chat
 
 Returns: "chat", $chan, $from, $text
 
 =cut
 
 	# Channel chat
-	elsif ($pkttype eq '2') {
-		# {{{
+	elsif ($pkttype eq '2') { # {{{
 		my ($chan, $from, $text) = @args;
-		$text = '' unless $text;
-		if ($chan && $from) {
-			if ($self->on_chan($self->{nick}, $chan)) {
-				$self->debug($chan .":<$from> $text", $buffer); 
-				@re = ("chat", $chan, $from, $text);
+		if ($self->on_userlist($from)) {
+			$text = '' unless $text;
+			if ($chan && $from) {
+				if ($self->on_chan($self->{nick}, $chan)) {
+					$self->debug($chan .":<$from> $text", $buffer); 
+					@re = ("chat", $chan, $from, $text);
+				}
 			}
 		}
-		# }}}
-	}
+	} # }}}
 
-=item nick change
+=head4 nick change
 
 Returns: "nick", $oldnick, $newnick
 
 =cut
 
 	# Nick change
-	elsif ($pkttype eq '3') {
-		# {{{
-		my ($oldnick,$newnick) = @args;
-		if ($newnick ne $self->{'nick'} && $oldnick ne $newnick) {
+	elsif ($pkttype eq '3') { # {{{
+		my ($oldnick, $newnick) = @args;
+		if ($ip ne $self->{localip} &&
+				$self->on_userlist($oldnick) &&
+				$oldnick ne $newnick) {
+			if ($oldnick eq $self->{oldnick}) {
+				$self->{oldnick} = '';
+			}
+			elsif ($newnick eq $self->{nick} && $self->{coll_avoid}) {
+				for (0..99) {
+					my $nick = $self->{nick};
+					$nick =~ s/^\[\d*\]//;
+					unless ($self->on_userlist("[$_]".$nick)) {
+						$self->nick("[$_]".$nick);
+						last;
+					}
+				}
+			}
 			$self->{'users'}{$newnick} = $self->{'users'}{$oldnick};
 			delete $self->{'users'}{$oldnick};
-			$self->debug("* $oldnick changed to $newnick", $buffer); 
+			$self->debug("F: recognise(), T: nick, From: $oldnick, To: $newnick"
+				, $buffer); 
 			@re = ("nick", $oldnick, $newnick);
 		}
-		# }}}
-	}
+	} # }}}
 
-=item channel join
+=head4 channel join
 
 Returns: "join", $from, $chan, $status
 
 =cut
 
-	# Chan join
 	elsif ($pkttype eq '4') { # {{{
 		my ($who, $chan, $status) = @args;
 		$status = substr $status, 0, 1;
-		if ($self->on_chan($chan) && $who ne $self->{nick}) {
-			$self->debug("F: recognise(), T: join, From: $who, "
-				. "Chan: $chan, Status: "
-				. $self->num2status($status)
-				, $buffer); 
+		if ($ip ne $self->{localip}) {
+			if ($self->{last_joined_chan} eq $chan) {
+				$self->{last_joined_chan} = '';
+			}
+			elsif ($who eq $self->{nick}) {
+				for (0..99) {
+					my $nick = $self->{nick};
+					$nick =~ s/^\[\d*\]//;
+					unless ($self->on_userlist("[$_]".$nick)) {
+						$self->nick("[$_]".$nick);
+						last;
+					}
+				}
+			}
+			if ($self->on_chan($chan)) {
+				$self->debug("F: recognise(), T: join, From: $who, "
+					. "Chan: $chan, Status: "
+					. $self->num2status($status)
+					, $buffer); 
 
-			$self->send_topic($who, $chan);
-			$self->{users}{$who}{status} = $status;
-			$self->{users}{$who}{active} = 1;
-			$self->{users}{$who}{ip} = $ip;
-			$self->add_to_channel($who, $chan);
-			@re = ("join", $who, $chan, $status);
+				$self->send_topic($who, $chan);
+				$self->{users}{$who}{status} = $status;
+				$self->{users}{$who}{active} = 1;
+				$self->{users}{$who}{ip} = $ip;
+				$self->add_to_channel($who, $chan);
+				@re = ("join", $who, $chan, $status);
+			}
 		}
 	} # }}}
 
-=item channel part
+=head4 channel part
 
 Returns: "part", $who, $chan
 
@@ -1361,75 +1388,72 @@ Returns: "part", $who, $chan
 		my ($who, $chan) = @args;
 		if ($who ne $self->{nick} && $self->on_chan($who, $chan)) {
 			$self->delete_from_channel($who, $chan);
-			$self->debug("$who has left $chan", $buffer); 
+			$self->debug("F: recognise(), T: part, From: $who, Chan: $chan", $buffer);
 			@re = ("part", $who, $chan);
 		}
 	} # }}}
 
-=item message
+=head4 message
 
 Returns: "msg", $from, $text
 
 =cut
 
 	# Message
-	elsif ($pkttype eq '6') {
-		# {{{
-		my ($from,$to,$text) = @args;
-		$text = '' unless $text;
-		if ($to eq $self->{'nick'}) {
-			$self->debug("Got msg from $from:\n$text", $buffer); 
-			$self->msg_ack($from);
-			@re = ("msg",$from,$text);
+	elsif ($pkttype eq '6') { # {{{
+		my ($from, $to, $text) = @args;
+		if ($self->on_userlist($from)) {
+			$text = '' unless $text;
+			if ($to eq $self->{'nick'}) {
+				$self->debug("F: recognise(), T: msg, From: $from, Msg: \"$text\""
+					, $buffer); 
+				$self->msg_ack($from);
+				@re = ("msg",$from,$text);
+			}
 		}
-		# }}}
-	}
+	} # }}}
 
-=item mass message
+=head4 mass message
 
 Returns: "mass", $from, $text
 
 =cut
 
 	# Mass message
-	elsif ($pkttype eq 'E') {
-		# {{{
-		my ($from,$to,$text) = @args;
-		$text = '' unless $text;
-		#$buffer =~ /^\x58.{9}E(.+?)\0(.+?)\0(.+?)\0+$/s;
-		if ($to eq $self->{'nick'}) {
-			$self->debug("Got mass msg from $from:\n$text", $buffer); 
-			$self->msg_ack($from);
-			@re = ("mass", $from, $text);
+	elsif ($pkttype eq 'E') { # {{{
+		my ($from, $to, $text) = @args;
+		if ($self->on_userlist($from)) {
+			$text = '' unless $text;
+			#$buffer =~ /^\x58.{9}E(.+?)\0(.+?)\0(.+?)\0+$/s;
+			if ($to eq $self->{'nick'}) {
+				$self->debug("Got mass msg from $from:\n$text", $buffer); 
+				$self->msg_ack($from);
+				@re = ("mass", $from, $text);
+			}
 		}
-		# }}}
-	}
+	} # }}}
 
-=item message acknowledgment
+=head4 message acknowledgment
 
-Returns: "msgack", $from, $aa, $status, $gender
+Returns: "msg_ack", $from, $aa, $status, $gender
 
 =cut
 
 	# Msg acck
-	elsif ($pkttype eq '7') {
-		# {{{
-		my ($to,$from,$aa) = @args;
-#		my ($status, $to) = split //, $temp, 2;
+	elsif ($pkttype eq '7') { # {{{
+		my ($to, $from, $aa) = @args;
 		my $status = substr $to, 0, 1, '';
 		my $gender = substr $aa, 0, 1, '';
-#		my ($gender, $aa) = split //, $temp1, 2;
 		#$buffer =~ /^\x58.{9}7([0123])(.+?)\0(.+?)\0([01])(.*)\0+$/s;
-		if ($to =~ $self->{'nick'}) {
+		if ($to eq $self->{'nick'}) {
 			$self->{'users'}{$from}{'status'} = $status;
 			$self->debug("Got msg ack that $from received msg with aa: $aa",
 				$buffer);
-			@re = ("msgack", $from, $aa, $gender);
+			@re = ("msg_ack", $from, $aa, $status, $gender);
 		}
-		# }}}
-	}
+	} # }}}
 
-=item remote execution
+=head4 remote execution
 
 Returns: "remote_exec", $who, $command, $password
 
@@ -1448,7 +1472,7 @@ Returns: "remote_exec", $who, $command, $password
 		# }}}
 	}
 
-=item remote execution acknowledgement
+=head4 remote execution acknowledgement
 
 Returns: "remote_exec_ack", $from_who, $execution_text
 
@@ -1465,7 +1489,7 @@ Returns: "remote_exec_ack", $from_who, $execution_text
 		# }}}
 	}
 
-=item channel /me
+=head4 channel /me
 
 Returns: "me", $chan, $fromwho, $text
 
@@ -1485,7 +1509,7 @@ Returns: "me", $chan, $fromwho, $text
 		# }}}
 	}
 
-=item topic change
+=head4 topic change
 
 Returns: "topic", $chan, $topic
 
@@ -1505,7 +1529,7 @@ Returns: "topic", $chan, $topic
 		# }}}
 	}
 
-=item topic send
+=head4 topic send
 
 Returns: "topic", $chan, $topic
 
@@ -1534,7 +1558,7 @@ Returns: "topic", $chan, $topic
 		# }}}
 	}
 
-=item status change
+=head4 status change
 
 Returns: "statuschange", $status, $aa
 
@@ -1556,7 +1580,7 @@ Returns: "statuschange", $status, $aa
 		# }}}
 	}
 
-=item info request
+=head4 info request
 
 Returns: "info", $from
 
@@ -1575,7 +1599,7 @@ Returns: "info", $from
 		# }}}
 	}
 
-=item info request acknowledgment
+=head4 info request acknowledgment
 
 Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
 
@@ -1599,13 +1623,13 @@ Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
 		}
 	} # }}}
 			
-=item beep
+=head4 beep
 
 Returns: "beep", $from
 
 =cut
 
-=item beep acknowledgement
+=head4 beep acknowledgement
 
 Returns: "beep_ack", $from, $gender
 
@@ -1630,7 +1654,7 @@ Returns: "beep_ack", $from, $gender
 		# }}}
 	}
 
-=item sound request
+=head4 sound request
 
 Returns: "sound_req", $from, $filename, $channel
 
@@ -1647,19 +1671,19 @@ Returns: "sound_req", $from, $filename, $channel
 		# }}}
 	}
 	
-=item private chat join
+=head4 private chat join
 
 Returns: "pjoin", $from
 
-=item private chat leave
+=head4 private chat leave
 
 Returns: "ppart", $from
 
-=item private chat string
+=head4 private chat string
 
 Returns: "pchat", $from, $text
 
-=item private chat /me
+=head4 private chat /me
 
 Returns: "pme", $from, $text
 
@@ -1692,7 +1716,7 @@ Returns: "pme", $from, $text
 		}
 	} # }}}
 	
-=item here request
+=head4 here request
 
 Returns: "here", $fromwho, $chan
 
@@ -1711,9 +1735,9 @@ Returns: "here", $fromwho, $chan
 		# }}}
 	}
 
-=item here acknowledgement
+=head4 here acknowledgement
 
-Returns: "hereack", $from, $chan, $active
+Returns: "here_ack", $from, $chan, $active
 
 =cut
 
@@ -1721,14 +1745,14 @@ Returns: "hereack", $from, $chan, $active
 		# {{{
 		my ($to, $chan, $from, $active) = @args;
 		if ($to eq $self->{nick}) {
-			$self->debug("Here ack from $from, chan $chan, status "
-				.$self->num2status($active), $buffer);
-			@re = ("hereack", $from, $chan, $active);
+			$self->debug("F: recognise(), T:here_ack,From: $from, Chan $chan"
+				. ", status " .$self->num2status($active), $buffer);
+			@re = ("here_ack", $from, $chan, $active);
 		}
 		# }}}
 	}
 
-=item activity change
+=head4 activity change
 
 Returns: "active", $fromwho, $active
 
@@ -1750,14 +1774,12 @@ Returns: "active", $fromwho, $active
 		# }}}
 	}
 	else {
-		print "Received unknown buffer: [$buffer]\n" if $self->{debug} == 2;
+		$self->debug("Received unknown buffer", $buffer) if $self->{debug} == 2;
 	}
 	return @re;
 }
 1;
 __END__
-
-=back
 
 =head1 TRICKS
 

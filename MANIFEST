@@ -4,4 +4,3 @@ Makefile.PL
 MANIFEST
 README
 t/1.t
-Vypress_Proto.txt

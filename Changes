@@ -1,3 +1,52 @@
+2004-06-30 18:05  arturaz
+
+	* Chat.pm (1.20), README (1.6), t/1.t (1.12):
+	  * Version bump to 0.71.  * Doc updates in Chat.pm.
+
+2004-06-27 23:04  arturaz
+
+	* Chat.pm (1.19):
+	  Chat.pm
+
+		  * Corrected nick collision avasion code, t seems ok right
+	  now. Still, it's a
+			  bit broken, so i would like ideas how to fix it
+	  :)
+
+2004-06-27 00:07  arturaz
+
+	* Chat.pm (1.18), t/1.t (1.11):
+	  Chat.pm
+
+		  * Added nick collision evasion. However due to that all
+	  module broke. Need
+			  to fix it.
+
+	  t/1.t
+
+		  * Added tests related to unicast socket.
+
+2004-06-25 22:37  arturaz
+
+	* MANIFEST (1.2), t/1.t (1.10):
+	  t/1.t
+
+		  * Somewhat better testing system using alarm.
+
+2004-06-25 20:35  arturaz
+
+	* Chat.pm (1.17):
+	  Chat.pm
+
+		  * removed =head3 channels doc tag.
+
+2004-06-25 19:07  arturaz
+
+	* Changes (1.8), README (1.5):
+	  README
+
+		  * Added link to BerliOS project page.
+
 2004-06-25 18:43  arturaz
 
 	* Chat.pm (1.16), README (1.4), Vypress_Proto.txt (1.2):
