@@ -1,3 +1,7 @@
+# vim:syntax=perl
+# vim:tabstop=2
+# vim:shiftwidth=2
+# vim:enc=utf-8
 package Net::Vypress::Chat;
 
 use 5.008;
@@ -12,7 +16,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.50';
+our $VERSION = '0.60';
 
 # Prints debug messages
 sub debug { # {{{
@@ -68,22 +72,71 @@ sub send_topic { # {{{
 	my $topic = $self->{'channels'}->{$chan}{'topic'};
 	my $str = header()."C".$to."\0".$chan."\0".$topic."\0";
 	$self->{'send'}->send($str);
-	$self->debug("Sent topic $topic for $to on $chan", $str);
+	$self->debug("F: send_topic(), To: $to, Chan: $chan, Topic: \"$topic\""
+		, $str);
+	}
+} # }}}
+
+# Changes in channels list.
+sub change_in_channels { # {{{
+	my ($self, $from, $to) = @_;
+	while (my ($key, $channel) = each %{$self->{channels}}) {
+		my $arr_cnt = @{$channel->{users}};
+		my $last;
+		for (0..$arr_cnt-1) {
+			if (@{$channel->{users}}[$_] eq $from) {
+				@{$self->{channels}{$key}{users}}[$_] = $to;
+				$last = 1;
+			}
+			last if $last;
+		}
 	}
 } # }}}
 
 # Deletes channel from user.
 sub delete_from_channel { # {{{
-	my ($self,$nick,$chan) = @_;
-	my $arr_count = @{$self->{users}{$nick}{channels}};
+	my ($self, $nick, $chan) = @_;
+	if ($nick eq $self->{nick}) {
+		delete $self->{channels}{$chan};
+	}
+	else {
+		my $arr_count = @{$self->{channels}{$chan}{users}};
+		my $last;
+		for (0..$arr_count-1) {
+			if (@{$self->{channels}{$chan}{users}}[$_] eq $nick) {
+				splice @{$self->{channels}{$chan}{users}}, $_, 1;
+				$last = 1;
+			}
+			last if $last;
+		}
+	}
+	$self->debug("F: delete_from_channel(), Nick: $nick, Chan: $chan");
+} # }}}
+
+# Adds channel record.
+sub add_to_channel { # {{{
+	my ($self, $nick, $chan) = @_;
+	push @{$self->{channels}{$chan}{users}}, $nick;
+} # }}}
+
+# Deletes private record.
+sub delete_from_private { # {{{
+	my ($self, $nick) = @_;
+	my $arr_count = @{$self->{users}{$self->{nick}}{chats}};
 	my $last;
 	for (0..$arr_count-1) {
-		if (@{$self->{users}{$nick}{channels}}[$_] eq $chan) {
-			delete @{$self->{users}{$nick}{channels}}[$_];
+		if (@{$self->{users}{$self->{nick}}{chats}}[$_] eq $nick) {
+			splice @{$self->{users}{$self->{nick}}{chats}}, $_, 1;
 			$last = 1;
 		}
 		last if $last;
 	}
+} # }}}
+
+# Adds private record.
+sub add_to_private { # {{{
+	my ($self, $nick) = @_;
+	push @{$self->{users}{$self->{nick}}{chats}}, $nick;
 } # }}}
 
 # Acknowledges a beep
@@ -98,6 +151,16 @@ sub beep_ack { # {{{
 # CHECK THIS OUT
 sub chanlist_ack { # {{{
 	my ($self, $to) = @_;
+} # }}}
+
+# Acknowledges to here() request on channel.
+sub here_ack { # {{{
+	my ($self, $to, $chan) = @_;
+	my $str = header()."K".$to."\0".$chan."\0".$self->{'nick'}."\0"
+		.$self->{'users'}{$self->{'nick'}}{'active'};
+	$self->{'send'}->send($str);
+	$self->debug("Sent here to $to at $chan with state "
+		.num2active($self->{'users'}{$self->{'nick'}}{'active'}), $str);
 } # }}}
 
 
@@ -177,6 +240,18 @@ Initialises new instance of module. Sets these variables:
 
 =back
 
+=item sign_topic - automaticaly sign topic. Default: 1
+
+=over
+
+=item *
+0 - not active;
+
+=item *
+1 - active;
+
+=back
+
 =item gender - current gender.
 Is not used, but it is in protocol. Also it seems that Vypress Chat 1.9 has
 preference for that.
@@ -221,6 +296,9 @@ If it cannot do that or you don't have canonical hostname set up it will be set
 to '127.0.0.1'. Note: module cannot function properly in such mode and you will
 be warned in console. Also $vyc->{badip} variable will be set to 1.
 
+=item host
+- your hostname. Defaults to: hostname()
+
 =item debug
 - debug level. Debug messages are printed to STDOUT. Default: 0
 
@@ -256,12 +334,11 @@ sub new { # {{{
 	$self->{nick} = "default";
 	$self->{port} = $args{port} || 8167;
 	$self->{debug} = $args{debug} || 0;
-	$self->{send_info} = $args{send_info} || 1;
-	$self->{channels} = {};
-	$self->{chats} = {};
-	my $host = $args{host} || hostname();
+	$self->{send_info} = (defined $args{send_info}) ? $args{send_info} : 1;
+	$self->{sign_topic} = (defined $args{sign_topic}) ? $args{sign_topic} : 1;
+	$self->{host} = $args{host} || hostname();
 	$self->{'localip'} = $args{'localip'}
-		|| inet_ntoa(scalar gethostbyname($host || 'localhost'));
+		|| inet_ntoa(scalar gethostbyname($self->{host} || 'localhost'));
 	if (!defined $args{'localip'} && $self->{'localip'} eq "127.0.0.1") {
 		carp ("Your hostname resolution returned '127.0.0.1'. This probably "
 			."indicates broken dns. Make sure that resolving your hostname "
@@ -289,7 +366,6 @@ sub init_users { # {{{
 	my $tmpactive = $self->{'users'}{$self->{'nick'}}{'active'} || 0;
 	my $tmpgender = $self->{'users'}{$self->{'nick'}}{'gender'} || 0;
 	my $tmpaa = $self->{'users'}{$self->{'nick'}}{'autoanswer'} || '';
-	my @tmpchannels = $self->{users}{$self->{nick}}{channels} || [];
 	my @tmpchats = $self->{users}{$self->{nick}}{chats} || [];
 	# And then clear userlist and set those values back.
 	$self->{'users'} = {
@@ -298,7 +374,6 @@ sub init_users { # {{{
 			'active'	=>	$tmpactive,
 			'gender'	=>	$tmpgender,
 			'autoanswer'	=>	$tmpaa,
-			'channels' => @tmpchannels,
 			'chats' => @tmpchats
 		}
 	};
@@ -351,6 +426,9 @@ sub nick { # {{{
 		# We assign oldnick data structure here.
 		$self->{'users'}{$self->{'nick'}} = $self->{'users'}{$oldnick};
 		delete $self->{'users'}{$oldnick};
+
+		# Changing in channels
+		$self->change_in_channels($oldnick, $self->{nick});
 		
 		# If we are connected to net announce nick change.
 		if (defined $self->{'send'} && $self->{init}) {
@@ -530,12 +608,12 @@ E.g.: $vyc->join("#Main");
 
 sub join { # Join to channel {{{
 	my ($self, $chan) = @_;
-	if (!$self->on_chan($chan)) {
+	if (!$self->on_chan($self->{nick}, $chan)) {
 		my $str = header()."4".$self->{'nick'}."\0".$chan."\0"
 			.$self->{'users'}{$self->{'nick'}}{'status'}
 			.$self->{'users'}{$self->{'nick'}}{'gender'};
 		$self->{'send'}->send($str);
-		push @{$self->{users}{$self->{nick}}{channels}}, $chan;
+		$self->add_to_channel($self->{nick}, $chan);
 		$self->debug("F: join(), Chan: $chan", $str);
 	}
 	else {
@@ -553,7 +631,7 @@ E.g.: $vyc->part("#Main");
 
 sub part { # {{{
 	my ($self, $chan) = @_;
-	if ($self->on_chan($chan)) {
+	if ($self->on_chan($self->{nick}, $chan)) {
 		my $str = header()."5".$self->{'nick'}."\0".$chan."\0"
 			.$self->{'users'}{$self->{'nick'}}{'gender'};
 		$self->{'send'}->send($str);
@@ -576,11 +654,12 @@ E.g.: $vyc->topic("#Main", "Hi folks") would give this topic - "Hi folks (Simple
 
 sub topic { # {{{
 	my ($self, $chan, $topic) = @_;
-	my $signature = ($topic) ? ' ('.$self->{'nick'}.')' : '';
+	my $signature = '';
+	$signature = ' ('.$self->{'nick'}.')' if $topic && $self->{sign_topic};
 	my $str = header()."B".$chan."\0".$topic.$signature."\0";
-	$self->{'channels'}->{$chan}{'topic'} = $topic;
+	$self->{'channels'}{$chan}{'topic'} = $topic;
 	$self->{'send'}->send($str);
-	$self->debug("Changed topic on $chan:\n$topic", $str);
+	$self->debug("F: topic(), Chan: $chan, Topic: \"$topic\"", $str);
 } # }}}
 
 
@@ -588,7 +667,7 @@ sub topic { # {{{
 
 Sends message to person.
 
-E.g.: $vyc->msg("AnotherGuy", "Hello there...");
+E.g.: $vyc->msg("John", "Hello there...");
 
 =cut
 
@@ -706,7 +785,7 @@ sub chanlist { # {{{
 
 Asks user to give his information.
 
-E.g.: $vyc->info("AnotherGuy");
+E.g.: $vyc->info("John");
 
 =cut
 
@@ -717,45 +796,174 @@ sub info { # {{{
 	$self->debug("F: info(), To: $to", $str);
 } # }}}
 
-# Sends your computer information. Information that is sent:
-# host, ip, channels, 
-# host - got by hostname().
-# ip address - value that localip is set to or got from host.
-# channel list - the channel list which is being held in %{$vyc->{'channels'}}.
-# auto answer - got from autoanswer variable.
-sub send_info {
-# {{{ 
-	my ($self, $to) = @_;
-	my $host = hostname();
-	my $ip = $self->{localip}
-	  || inet_ntoa(scalar gethostbyname($host || 'localhost'));
-	my $chans;
-	$chans .= $_ for keys %{$self->{'channels'}};
-	my $str = header()."G".$to."\0".$self->{'nick'}."\0".$host."\0"
-	  .$ENV{'USER'}."\0".$ip."\0".$chans."#\0"
-	  .$self->{'users'}{$self->{'nick'}}{'autoanswer'}."\0";
-	$self->{'send'}->send($str);
-	$self->debug("Replied to $to with info:
-Nick: $self->{'nick'}
-Host: $host
-User: ".$ENV{'USER'}."
-IP: $ip
-Chan: $chans
-AA:   $self->{'users'}{$self->{'nick'}}{'autoanswer'}", $str);
-# }}}
-}
+=head2 info_ack($user)
 
-#Acknowledges to here() request on channel.
-sub here_ack {
-# {{{
-	my ($self, $to, $chan) = @_;
-	my $str = header()."K".$to."\0".$chan."\0".$self->{'nick'}."\0"
-		.$self->{'users'}{$self->{'nick'}}{'active'};
+Sends user your information.
+
+E.g.: $vyc->info_ack("John");
+
+By default module sends following information automatically 
+whenever requested by another client (see new()):
+
+=over
+
+=item host
+- see new();
+
+=item user
+- gets enviroment variable USER;
+
+=item channel list
+- gets it from $self->{users}{$self->{nick}}{channels};
+
+=item auto answer
+- gets it from $self->{users}{$self->{nick}}{autoanswer}
+
+=back
+
+=head2 info_ack($user, $host, $ip, $user, $channels, $autoanswer)
+
+If you turn off send_info variable (see new()) module won't send
+any information automatically. Then you can access this method to
+generate answer for information request.
+
+=head3 channels
+
+Channels variable can have these values:
+
+=over
+
+=item *
+1 - send actual channel list
+
+=item *
+0 - send nothing but #Main
+
+=item *
+array - array of channels.
+
+=back
+
+E.g.: $vyc->info_ack("John", "made.up.host", "user", "1.2.3.4", 
+['#Main'], "");
+
+=cut
+
+sub info_ack { # {{{
+	my ($self, $to, $host, $ip, $user, $chans, $aa) = @_;
+	$host = $self->{host} unless $host;
+	$ip = $self->{localip} unless $ip;
+	$user = $ENV{USER} unless $user;
+	$aa = $self->{users}{$self->{nick}}{autoanswer} unless $aa;
+
+	if (!defined $chans || $chans eq '1') {
+		$chans = join '', $self->get_chans($self->{nick});
+	}
+	elsif ($chans eq '0') {
+		$chans = '#Main';
+	}
+	else {
+		my $tempchans;
+		$tempchans .= $_ for @{$chans};
+		$chans = $tempchans;
+	}
+	
+	my $str = header() ."G". $to ."\0". $self->{'nick'} ."\0". $host
+		 ."\0". $user ."\0". $ip ."\0". $chans ."#\0"
+	   . $aa ."\0";
 	$self->{'send'}->send($str);
-	$self->debug("Sent here to $to at $chan with state "
-		.num2active($self->{'users'}{$self->{'nick'}}{'active'}), $str);
-# }}}
-}
+	$self->debug("F: info_ack(), To: $to, Nick: $self->{'nick'}, Host: $host "
+		. "User: $user, IP: $ip, Chans: $chans, AA: $aa", $str);
+} # }}}
+
+=head2 pjoin($user)
+
+Joins to private chat.
+
+E.g.: $vyc->pjoin("John");
+
+=cut
+
+sub pjoin { # {{{
+	my ($self, $to) = @_;
+	unless ($self->on_priv($to)) {
+		my $str = header() ."J0". $self->{nick} ."\0". $to ."\0"
+			. $self->{users}{$self->{nick}}{gender};
+		$self->{send}->send($str);
+		$self->add_to_private($to);
+		$self->debug("F: pjoin(), To: $to", $str);
+	}
+	else {
+		$self->debug("F: pjoin(), To: $to, Err: Already in.");
+	}
+} # }}}
+
+=head2 ppart($user)
+
+Parts private chat.
+
+E.g.: $vyc->ppart("John");
+
+=cut
+
+sub ppart { # {{{
+	my ($self, $to) = @_;
+	if ($self->on_priv($to)) {
+		my $str = header() ."J1". $self->{nick} ."\0". $to ."\0"
+			. $self->{users}{$self->{nick}}{gender};
+		$self->{send}->send($str);
+		$self->delete_from_private($to);
+		$self->debug("F: ppart(), To: $to", $str);
+	}
+	else {
+		$self->debug("F: ppart(), To: $to, Err: Already out.");
+	}
+} # }}}
+
+=head2 pchat($user, $text)
+
+Sends string to private chat.
+
+E.g.: $vyc->pchat("John", "Some message");
+
+=cut
+
+sub pchat { # {{{
+	my ($self, $to, $text) = @_;
+	$text = '' unless $text;
+	if ($self->on_priv($to)) {
+		my $str = header() ."J2". $self->{nick} ."\0". $to ."\0"
+			. $text ."\0";
+		$self->{send}->send($str);
+		$self->debug("F: pchat(), To: $to", $str);
+	}
+	else {
+		$self->debug("F: pchat(), To: $to, Err: not in chat.");
+	}
+} # }}}
+
+=head2 pme($user, $text)
+
+Sends /me action to private chat.
+
+E.g.: $vyc->pme("John", "Some action");
+
+=cut
+
+sub pme { # {{{
+	my ($self, $to, $text) = @_;
+	$text = '' unless $text;
+	if ($self->on_priv($to)) {
+		my $str = header() ."J3". $self->{nick} ."\0". $to ."\0"
+			. $text ."\0";
+		$self->{send}->send($str);
+		$self->debug("F: pme(), To: $to", $str);
+	}
+	else {
+		$self->debug("F: pme(), To: $to, Err: not in chat.");
+	}
+} # }}}
+
 
 =head2 startup()
 
@@ -823,16 +1031,47 @@ Checks if you are on some specific channel.
 
 E.g.: $vyc->on_chan("#Main") would return 1.
 
+=head2 on_chan($nick, $channel)
+
+Checks if someone are on some specific channel.
+
 =cut
 
 sub on_chan { # {{{
-	my ($self, $chan) = @_;
-	if (grep(/\Q$chan\E/, @{$self->{users}{$self->{nick}}{channels}})) {
-		$self->debug("F: on_chan(), Chan: $chan, Status: 1");
+	my ($self, $nick, $chan) = @_;
+	unless (defined $chan) {
+		$chan = $nick;
+		$nick = $self->{nick};
+	}
+	if (
+		defined $self->{channels}{$chan} &&
+		grep(/^\Q$nick\E$/, @{$self->{channels}{$chan}{users}})
+	) {
+		$self->debug("F: on_chan(), Nick: $nick, Chan: $chan, Status: 1");
 		return 1;
 	}
 	else {
-		$self->debug("F: on_chan(), Chan: $chan, Status: 0");
+		$self->debug("F: on_chan(), Nick: $nick, Chan: $chan, Status: 0");
+		return 0;
+	}
+} # }}}
+
+=head2 on_priv($person)
+
+Checks if you are in private chat with someone.
+
+E.g.: $vyc->on_priv("John") would return 1 if you were in chat with John.
+
+=cut
+
+sub on_priv { # {{{
+	my ($self, $to) = @_;
+	if (grep(/^\Q$to\E$/, @{$self->{users}{$self->{nick}}{chats}})) {
+		$self->debug("F: on_priv(), To: $to, Status: 1");
+		return 1;
+	}
+	else {
+		$self->debug("F: on_priv(), To: $to, Status: 0");
 		return 0;
 	}
 } # }}}
@@ -847,7 +1086,7 @@ E.g.: $vyc->on_userlist("Dude") would return 1 if Dude would be logged in.
 
 sub on_userlist { # {{{
 	my ($self, $user) = @_;
-	if (grep(/\Q$user\E/, keys %{$self->{'users'}})) {
+	if (grep(/^\Q$user\E$/, keys %{$self->{'users'}})) {
 		$self->debug("F: on_userlist(), User: $user, Status: 1");
 		return 1
 	}
@@ -857,22 +1096,57 @@ sub on_userlist { # {{{
 	}
 } # }}}
 
-=head2 recognise($buffer)
+=head2 get_chans($nick)
 
-Recognises string in a buffer if it is Vypress Chat protocol command.
-Returns type of command and its arguments. Also executes actions when needed.
+Returns array containing all channels user is on.
+
+E.g.: @chans = $vyc->get_chans('John');
+
+=cut
+
+sub get_chans { # {{{
+	my ($self, $nick) = @_;
+	my (@chans, $chans);
+	for (keys %{$self->{channels}}) {
+		if (grep /^\Q$nick\E$/, @{$self->{channels}{$_}{users}}) {
+			push @chans, $_;
+			$chans .= $_;
+		}		
+	}
+	$self->debug("F: get_chans(), Nick: $nick, Chans: $chans");
+	return @chans;	
+} # }}}
+
+=head2 readsock()
+
+Reads socket and recognises string it received.
+Returns array. See recognise().
 
 E.g.: 
 
- while ($vyc->{'listen'}->recv($buffer, 1024)) {
- 	my @return = $vyc->recognise($buffer);
- 	if ($r[0] =~ /message/) {
- 		if ($r[2] =~ /pass $password/) {
- 			$vyc->msg($r[1], "Password accepted.");
- 			$admin = $r[1];
- 		}
+ while (my @args = $vyc->readsock()) {
+ 	# Remove first array element.
+ 	my $packet_type = shift @args;
+	if ($packet_type eq 'msg') {
+		my ($from, $message) = @args;
  	}
  }
+
+=cut
+
+sub readsock { # {{{
+	my $self = shift;
+	my $buffer;
+	my $ip = $self->{'listen'}->recv($buffer, 1024);
+	(undef, $ip) = sockaddr_in($ip);
+	$ip = inet_ntoa($ip);
+	return $self->recognise($buffer, $ip);
+} # }}}
+
+=head2 recognise($buffer, $ip)
+
+Recognises string in a buffer if it is Vypress Chat protocol command.
+Returns type of command and its arguments. Also executes actions when needed.
 
 Values are returned in array. First value will always be type of command.
 Other values may differ. Possible values are:
@@ -882,7 +1156,7 @@ Other values may differ. Possible values are:
 =cut
 
 sub recognise {
-	my ($self, $buffer) = @_;
+	my ($self, $buffer, $ip) = @_;
 	my @re;
 	if ($buffer !~ /^\x58.{9}/) {
 		return ("badpckt");		
@@ -900,25 +1174,22 @@ Returns: "who", $updater.
 =cut
 
 	# Who's here?
-	if ($pkttype eq '0') {
-		# {{{
+	if ($pkttype eq '0') { # {{{
 		my $updater = $args[0];
 		$self->debug("F: recognise(), Type: who, From: $updater", $buffer); 
 		$self->i_am_here($updater);
 		@re = ("who", $updater);
-		# }}}
-	}
+	} # }}}
 
 =item I am here
 
-Returns: "whorep", $from, $status, $active
+Returns: "who_ack", $from, $status, $active
 
 =cut
 
 	# I'm here
-	elsif ($pkttype eq '1') {
-		# {{{
-		my ($updater,$responder,$statusactive) = @args;
+	elsif ($pkttype eq '1') { # {{{
+		my ($updater, $responder, $statusactive) = @args;
 		my ($status, $active) = split //, $statusactive;
 		if (($updater eq $self->{'nick'}) && 
 		(
@@ -926,16 +1197,17 @@ Returns: "whorep", $from, $status, $active
 			(!$self->on_userlist($responder))
 		)
 		) {
-			$self->debug("$responder said that it's here with status "
-				.$self->num2status($status)." and state "
-				.$self->num2active($active)."", $buffer); 
-			$self->{'users'}{$responder}{'status'} = $status;
-			$self->{'users'}{$responder}{'active'} = $active;
-			$self->debug("Added $responder to user list");
-			@re = ("whorep", $responder, $status, $active);
+			$self->debug("F: recognise(), T: who_ack, From: $responder, Status: "
+				. $self->num2status($status) .", Active: "
+				. $self->num2active($active)
+				, $buffer); 
+			$self->{users}{$responder}{status} = $status;
+			$self->{users}{$responder}{active} = $active;
+			$self->{users}{$responder}{ip} = $ip;
+			$self->add_to_channel($updater, '#Main') unless $self->on_chan('#Main');
+			@re = ("who_ack", $responder, $status, $active);
 		}
-		# }}}
-	}
+	} # }}}
 
 =item channel chat
 
@@ -949,7 +1221,7 @@ Returns: "chat", $chan, $from, $text
 		my ($chan, $from, $text) = @args;
 		$text = '' unless $text;
 		if ($chan && $from) {
-			if ($self->on_chan($chan)) {
+			if ($self->on_chan($self->{nick}, $chan)) {
 				$self->debug($chan .":<$from> $text", $buffer); 
 				@re = ("chat", $chan, $from, $text);
 			}
@@ -983,23 +1255,23 @@ Returns: "join", $from, $chan, $status
 =cut
 
 	# Chan join
-	elsif ($pkttype eq '4') {
-		# {{{
+	elsif ($pkttype eq '4') { # {{{
 		my ($who, $chan, $status) = @args;
 		$status = substr $status, 0, 1;
-		if ($self->on_chan($chan)) {
+		if ($self->on_chan($chan) && $who ne $self->{nick}) {
 			$self->debug("F: recognise(), T: join, From: $who, "
 				. "Chan: $chan, Status: "
 				. $self->num2status($status)
 				, $buffer); 
 
 			$self->send_topic($who, $chan);
-			$self->{'users'}{$who}{'status'} = $status;
-			$self->{'users'}{$who}{'active'} = 1;
+			$self->{users}{$who}{status} = $status;
+			$self->{users}{$who}{active} = 1;
+			$self->{users}{$who}{ip} = $ip;
+			$self->add_to_channel($who, $chan);
 			@re = ("join", $who, $chan, $status);
 		}
-		# }}}
-	}
+	} # }}}
 
 =item channel part
 
@@ -1007,15 +1279,14 @@ Returns: "part", $who, $chan
 
 =cut
 
-	# Chan part
-	elsif ($pkttype eq '5') {
-		# {{{
-		my ($who,$chan) = @args;
-		$self->delete_from_channel($who, $chan);
-		$self->debug("$who has left $chan", $buffer); 
-		@re = ("part", $who, $chan);
-		# }}}
-	}
+	elsif ($pkttype eq '5') { # {{{
+		my ($who, $chan) = @args;
+		if ($who ne $self->{nick} && $self->on_chan($who, $chan)) {
+			$self->delete_from_channel($who, $chan);
+			$self->debug("$who has left $chan", $buffer); 
+			@re = ("part", $who, $chan);
+		}
+	} # }}}
 
 =item message
 
@@ -1128,7 +1399,7 @@ Returns: "me", $chan, $fromwho, $text
 		my ($chan, $fromwho, $text) = @args;
 		$text = '' unless $text;
 		if ($chan && $fromwho) {
-			if ($self->on_chan($chan)) {
+			if ($self->on_chan($self->{nick}, $chan)) {
 				$self->debug("$chan * $fromwho $text", $buffer);
 				@re = ("me", $chan, $fromwho, $text);
 			}
@@ -1148,7 +1419,7 @@ Returns: "topic", $chan, $topic
 		my ($chan, $topic) = @args;
 		#$buffer =~ /^\x58.{9}B(#.+?)\0(.*)\0+$/s;
 
-		if ($self->on_chan($chan)) {
+		if ($self->on_chan($self->{nick}, $chan)) {
 			$self->{'channels'}{$chan}{'topic'} = $topic;
 			$self->debug("Topic changed on $chan:\n$topic", $buffer); 
 			@re = ("topic", $chan, $topic);
@@ -1220,7 +1491,7 @@ Returns: "info", $from
 		#$buffer =~ /^\x58.{9}F(.+?)\0(.+?)\0+$/;
 		if ($forwho =~ $self->{'nick'}) {
 			$self->debug("F: recognise(), T: info, From: $from", $buffer); 
-			$self->send_info($from) if $self->{send_info};
+			$self->info_ack($from) if $self->{send_info};
 			@re = ("info", $from);
 		}
 		# }}}
@@ -1228,13 +1499,12 @@ Returns: "info", $from
 
 =item info request acknowledgment
 
-Returns: "infosend", $from, $host, $user, $ip, $chans, $aa
+Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
 
 =cut
 
 	# Info req. ack.
-	elsif ($pkttype eq 'G') {
-		# {{{
+	elsif ($pkttype eq 'G') { # {{{
 		my ($forwho, $from, $host, $user, $ip, $chans, $aa) = @args;
 		#$buffer =~ /^\x58.{9}G(.+?)\0(.+?)\0(.+?)\0(.+?)\0(.+?)\0#(.+?)#\0(.+?)\0+$/s;
 		if ($forwho eq $self->{'nick'}) {
@@ -1244,16 +1514,12 @@ Returns: "infosend", $from, $host, $user, $ip, $chans, $aa
 			$chans = undef;
 			foreach (@chans) { $chans .= "#$_,"; }
 			chop $chans;
-			$self->debug("$from sent info:
-Host: $host
-User: $user
-Ip:   $ip
-Chans:$chans
-AA:   $aa", $buffer); 
-			@re = ("infosend", $from, $host, $user, $ip, $chans, $aa);
+			$self->debug("F: recognise(), T: info_ack, From: $from, Host: $host, "
+				. "User: $user, Ip: $ip, Chans: $chans, AA: $aa"
+				, $buffer); 
+			@re = ("info_ack", $from, $host, $user, $ip, $chans, $aa);
 		}
-		# }}}
-	}
+	} # }}}
 			
 =item beep
 
@@ -1296,12 +1562,57 @@ Returns: "sound_req", $from, $filename, $channel
 		# {{{
 		my ($from, $file, $chan) = @args;
 		$file = '' unless $file;
-		if ($self->on_chan($chan)) {
+		if ($self->on_chan($self->{nick}, $chan)) {
 			$self->debug("$from requested sound: $file", $buffer);
 			@re = ("sound_req", $from, $file, $chan);
 		}
 		# }}}
 	}
+	
+=item private chat join
+
+Returns: "pjoin", $from
+
+=item private chat leave
+
+Returns: "ppart", $from
+
+=item private chat string
+
+Returns: "pchat", $from, $text
+
+=item private chat /me
+
+Returns: "pme", $from, $text
+
+=cut
+
+	elsif ($pkttype eq 'J') { # {{{
+		my ($temp, $to, $text) = @_;
+    my ($subtype, $from) = split //, $temp, 2;
+		if ($to eq $self->{nick}) {
+			if ($subtype eq '0') {
+				$self->add_to_private($from);
+				$self->debug("F: recognise(), T: pjoin, From: $from", $buffer);
+				@re = ("pjoin", $from);
+			}
+			elsif ($subtype eq '1') {
+				$self->delete_from_private($from);
+				$self->debug("F: recognise(), T: ppart, From: $from", $buffer);
+				@re = ("ppart", $from);
+			}
+			elsif ($subtype eq '2') {
+				$self->debug("F: recognise(), T: pchat, From: $from, Text: \"$text\""
+					, $buffer);
+				@re = ("pchat", $from, $text);
+			}
+			elsif ($subtype eq '3') {
+				$self->debug("F: recognise(), T: pme, From: $from, Text: \"$text\""
+					, $buffer);
+				@re = ("pme", $from, $text);
+			}
+		}
+	} # }}}
 	
 =item here request
 
@@ -1314,7 +1625,7 @@ Returns: "here", $fromwho, $chan
 		# {{{
 		my ($fromwho, $chan) = @args;
 		#$buffer =~ /^\x58.{9}L(.+?)\0(#.+?)\0+$/;
-		if ($self->on_chan($chan)) {
+		if ($self->on_chan($self->{nick}, $chan)) {
 			$self->debug("$fromwho requested here on $chan", $buffer); 
 			$self->here_ack($fromwho, $chan);
 			@re = ("here", $fromwho, $chan);
@@ -1372,17 +1683,17 @@ __END__
 
 =head1 SEE ALSO
 
-IO::Socket IO::Socket::Inet IO::Select recv()
+L<IO::Socket> L<IO::Socket::Inet> L<IO::Select> L<recv()>
 
-Official web page of Vypress Chat: http://vypress.com/products/chat/
+Official web page of Vypress Chat: L<http://vypress.com/products/chat/>
 
 =head1 AUTHOR
 
-Artûras Ðlajus, E<lt>x11@h2o.pieva.netE<gt>
+ArtÅ«ras Å lajus, E<lt>x11@h2o.pieva.netE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2003 by Artûras Ðlajus
+Copyright 2003 by ArtÅ«ras Å lajus
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 

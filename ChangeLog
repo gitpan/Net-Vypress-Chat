@@ -1,0 +1,101 @@
+2004-06-18 22:13  arturaz
+
+	* Chat.pm: Chat.pm
+
+		  * Adding bunch of stuff that i forgot.
+		  * Version bump to 0.60.
+		  * New subs: change_in_channels, get_chans.
+		  * New method for polling info: readsock().
+		  * Doc updates to make links.
+
+2004-06-18 21:49  arturaz
+
+	* Chat.pm, t/1.t: Chat.pm
+
+		  * Hopefully fixed private chats.
+		  * Redesigned channels structure.
+		  * Added ip variable to each user.
+		  * A _lot_ of bugfixes.
+
+2004-06-18 15:26  arturaz
+
+	* Chat.pm: Chat.pm
+
+		  * $self->{sign_topic} variable. See new(). Used on
+	  topic();
+
+2004-06-18 14:16  arturaz
+
+	* t/1.t: t/1.t
+
+		  * info_ack and spoofed info_ack tests.
+
+2004-06-18 14:10  arturaz
+
+	* Chat.pm, t/1.t: Chat.pm	* Privates fixed.	* TODO:
+	  unicast support, modify structure on $self->{channels} and
+	  {users}:	       $self->{channels} = {
+	  '#Main' => {				  'topic' => 'some topic',
+					'users' => [
+		      'john',
+	  'paul'				  ]			  }
+			}		$self->{users} = {
+	      'john' => {			      channels => [
+				    '#Main'
+	  ],				  ip => '1.2.3.4'
+		}		}		We'll need this for
+	  unicasting. Thing about something similar for private
+	    chats.
+
+	  t/1.t   * Commented pchat and pme tests. These doesn't work :(
+
+2004-06-18 01:29  arturaz
+
+	* Chat.pm, t/1.t: Chat.pm
+
+	  * Private chats are still broken.  * Subs: add_to_channel,
+	  delete_from_channel, add_to_private, delete_from_private *
+	  Changed channels structure, TODO: change channel topic structure.
+	   * Fixed bug where you got added to same channel twice.  *
+	  Fiddled a LOT with recognise().  * Added basic p* support in
+	  recognise (which is still broken).  * Modified on_chan to support
+	  either 2 or 3 args.
+
+	  t/1.t
+
+	  * Changed some tests.  * Added tests related to p*.
+
+2004-06-18 00:10  arturaz
+
+	* Chat.pm: Chat.pm
+
+	  * New methods: pjoin(), ppart(), pchat(), pme(), on_priv() * Vim
+	  specs in top of file.
+
+2004-06-17 23:35  arturaz
+
+	* Chat.pm: Chat.pm
+
+	  * Changed encoding to UTF-8.
+
+2004-06-17 23:25  arturaz
+
+	* Chat.pm: 0.50 Thu Jun 17 23:25:00 2004			-
+	  Chat.pm				* renamed send_info to
+	  info_ack.				   * added info_ack
+	  arguments.				 * code cleanup.
+			       * documentation cleanup.
+		     * changes to new():
+	  * send_info variable;				   * host
+	  variable;
+
+2004-06-17 20:42  arturaz
+
+	* Changes, README, Chat.pm, MANIFEST, Makefile.PL,
+	  Vypress_Proto.txt, t/1.t: * Initial CVS release.
+
+2004-06-17 20:42  arturaz
+
+	* Changes, README, Chat.pm, MANIFEST, Makefile.PL,
+	  Vypress_Proto.txt, t/1.t: Initial revision
+
