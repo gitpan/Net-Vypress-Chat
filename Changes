@@ -1,3 +1,38 @@
+2004-06-25 18:43  arturaz
+
+	* Chat.pm (1.16), README (1.4), Vypress_Proto.txt (1.2):
+	  Chat.pm
+
+		  * Unicast fully functional.
+		  * New sub: usend_chan
+		  * Version bump to 0.70.
+
+	  README
+
+		  * Version bump to 0.70.
+
+2004-06-25 18:16  arturaz
+
+	* Chat.pm (1.15), t/1.t (1.9):
+	  Chat.pm
+
+		  * New method: mass_to.
+		  * New sub: usend.
+		  * New variable: $vyc->{uc_fail} (see new()).
+		  * Unicast almost fully implemented, public channels left.
+
+	  t/1.t
+
+		  * New test for mass_to.
+
+2004-06-25 01:23  arturaz
+
+	* Changes (1.7), Chat.pm (1.14), t/1.t (1.8):
+	  Chat.pm
+
+		  * F: debug. More human-readable and verbose output on
+	  level 2.
+
 2004-06-24 23:51  arturaz
 
 	* Changes (1.6), Chat.pm (1.13), t/1.t (1.7):

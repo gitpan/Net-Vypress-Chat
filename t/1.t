@@ -6,7 +6,7 @@
 
 # change 'tests => 1' to 'tests => last_test_to_print';
 
-use Test::More tests => 41;
+use Test::More tests => 42;
 #use Test::More 'no_plan';
 BEGIN { use_ok('Net::Vypress::Chat') };
 
@@ -132,6 +132,9 @@ ok($vyc->on_priv($vyc->{nick}) == 0, "ppart ok.");
 
 $vyc->msg($vyc->{'nick'}, "");
 ok(get_type_ok('msg'), "got msg.");
+
+$vyc->mass_to(($vyc->{'nick'}), "");
+ok(get_type_ok('mass'), "got mass_to.");
 
 # Shutting down
 $vyc->shutdown;
