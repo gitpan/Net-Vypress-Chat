@@ -16,7 +16,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.60';
+our $VERSION = '0.61';
 
 # Prints debug messages
 sub debug { # {{{
@@ -1683,13 +1683,13 @@ __END__
 
 =head1 SEE ALSO
 
-L<IO::Socket> L<IO::Socket::Inet> L<IO::Select> L<recv()>
+L<IO::Socket> L<IO::Socket::Inet> L<IO::Select> L<recv>
 
 Official web page of Vypress Chat: L<http://vypress.com/products/chat/>
 
 =head1 AUTHOR
 
-Artūras Šlajus, E<lt>x11@h2o.pieva.netE<gt>
+Artūras Šlajus, E<lt>x11@h2o.sky.ltE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 

@@ -1,16 +1,10 @@
-Net/Vypress/Chat version 0.01
+Net/Vypress/Chat version 0.61
 =============================
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
-
-A README file is required for CPAN modules since CPAN extracts the
-README file from a module distribution so that people browsing the
-archive can use it get an idea of the modules uses. It is usually a
-good idea to provide version information here so that people can
-decide whether fixes for the module are worth downloading.
+Net::Vypress::Chat provides API for using vypress chat functions 
+like sending messages, setting topics and so on. It is also 
+capable of recognising incoming UDP message type and returning 
+information from it.
 
 INSTALLATION
 
@@ -21,17 +15,9 @@ To install this module type the following:
    make test
    make install
 
-DEPENDENCIES
-
-This module requires these other modules and libraries:
-
-  blah blah blah
-
 COPYRIGHT AND LICENCE
 
-Put the correct copyright and licence information here.
-
-Copyright (C) 2003 arturaz
+Copyright (C) 2003 Artūras Šlajus <x11@h2o.sky.lt>
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 
