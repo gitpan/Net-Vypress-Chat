@@ -47,7 +47,7 @@ sub get_type_ok { # {{{
 use Data::Dumper;
 
 ok($vyc->num2status(0) eq "Available", "num2status avail. ok");
-ok($vyc->num2status(1) eq "DND", "num2status DND ok");
+ok($vyc->num2status(1) eq "Do Not Disturb", "num2status DND ok");
 ok($vyc->num2status(2) eq "Away", "num2status away ok");
 ok($vyc->num2status(3) eq "Offline", "num2status offline ok");
 
@@ -111,8 +111,7 @@ ok(get_type_ok('info'), "got info req.");
 $vyc->info_ack($vyc->{nick});
 ok(get_type_ok('info_ack'), "got info_ack.");
 
-$vyc->info_ack($vyc->{nick}, "host", "user", "1.3.2.4", ['#Main', '#foobar']
-	, "AA");
+$vyc->info_ack($vyc->{nick}, "host", "user", "1.3.2.4", "AA", ['#Main', '#foobar']);
 ok(get_type_ok('info_ack'), "got spoofed info_ack.");
 
 ok($vyc->on_priv($vyc->{nick}) == 0, "on_priv not joined ok.");

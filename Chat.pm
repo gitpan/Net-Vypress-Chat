@@ -18,7 +18,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.72';
+our $VERSION = '0.73';
 
 # Prints debug messages
 sub debug { # {{{
@@ -34,9 +34,10 @@ sub debug { # {{{
 } # }}}
 
 # Generates random letters
-sub random_letters { # {{{
+sub gen_random { # {{{
 	my ($count) = shift;
-	my @pool = ("a".."z");
+	#my @pool = ("a".."z");
+	my @pool = (0..9);
 	my $str;
 	$str .= $pool[rand int $#pool] for 1..$count;
 	return $str;
@@ -46,7 +47,7 @@ sub random_letters { # {{{
 # Returns \x58 and nine random letters.
 sub header { # {{{
 	# 0x58 - Vypress Chat
-	return "\x58".random_letters(9);
+	return "\x58".gen_random(9);
 } # }}}
 
 # i_am_here($updater)
@@ -127,15 +128,8 @@ sub delete_from_channel { # {{{
 		delete $self->{channels}{$chan};
 	}
 	else {
-		my $arr_count = @{$self->{channels}{$chan}{users}};
-		my $last;
-		for (0..$arr_count-1) {
-			if (@{$self->{channels}{$chan}{users}}[$_] eq $nick) {
-				splice @{$self->{channels}{$chan}{users}}, $_, 1;
-				$last = 1;
-			}
-			last if $last;
-		}
+		my @temp = grep !/^\Q$nick\E$/, @{$self->{channels}{$chan}{users}};
+		$self->{channels}{$chan}{users} = \@temp;
 	}
 	$self->debug("F: delete_from_channel, Nick: $nick, Chan: $chan");
 } # }}}
@@ -150,15 +144,8 @@ sub add_to_channel { # {{{
 # Deletes private record.
 sub delete_from_private { # {{{
 	my ($self, $nick) = @_;
-	my $arr_count = @{$self->{users}{$self->{nick}}{chats}};
-	my $last;
-	for (0..$arr_count-1) {
-		if (@{$self->{users}{$self->{nick}}{chats}}[$_] eq $nick) {
-			splice @{$self->{users}{$self->{nick}}{chats}}, $_, 1;
-			$last = 1;
-		}
-		last if $last;
-	}
+	my @temp = grep !/^\Q$nick\E$/, @{$self->{users}{$self->{nick}}{chats}};
+	$self->{users}{$self->{nick}}{chats} = \@temp;
 } # }}}
 
 # Adds private record.
@@ -202,11 +189,11 @@ sub usend { # {{{
 		$self->{usend}->send($str, 0, $paddr);
 	}
 	elsif (!$self->{use_unicast} || $self->{uc_fail} == 1) {
-		if ($self->{uc_fail} == 1) {
-			$self->debug("F: usend, To: $to, Warn: IP unknown, A: Sending bcast.");
+		if (!$self->{use_unicast}) {
+			$self->debug("F: usend, To: $to, Warn: Sending bcast.");
 		}
 		else {
-			$self->debug("F: usend, To: $to, Warn: Sending bcast.");
+			$self->debug("F: usend, To: $to, Warn: IP unknown, A: Sending bcast.");
 		}
 		$self->{send}->send($str);
 	}
@@ -342,7 +329,7 @@ Default: 0
 current canonical hostname (like my.host.net) and converts it into ip address.
 If it cannot do that or you don't have canonical hostname set up it will be set
 to '127.0.0.1'. Note: module cannot function properly in such mode and you will
-be warned in console. Also $vyc->{badip} variable will be set to 1.
+be warned in console. Also $vyc->{bad_ip} variable will be set to 1.
 
 =item host
 - your hostname. Defaults to: hostname()
@@ -405,7 +392,7 @@ sub new { # {{{
 			."indicates broken dns. Make sure that resolving your hostname "
 			."returns your actual IP address. On most systems this can be done "
 			."by editing /etc/resolv.conf file.\n");
-		$self->{badip} = 1;
+		$self->{bad_ip} = 1;
 	}
 	return bless $self;
 } # }}}
@@ -525,7 +512,7 @@ sub num2status { # {{{
 	}
 	elsif ($status == 1) {
 		$self->debug("F: num2status, Status: DND");
-		return "DND";
+		return "Do Not Disturb";
 	}
 	elsif ($status == 2) {
 		$self->debug("F: num2status, Status: Away");
@@ -889,7 +876,7 @@ sub info { # {{{
 	$self->debug("F: info, To: $to", $str);
 } # }}}
 
-=head2 info_ack($user)
+=head2 info_ack($to)
 
 Sends user your information.
 
@@ -914,7 +901,7 @@ whenever requested by another client (see new()):
 
 =back
 
-=head2 info_ack($user, $host, $ip, $user, $channels, $autoanswer)
+=head2 info_ack($to, $host, $ip, $user, $autoanswer, $channels)
 
 If you turn off send_info variable (see new()) module won't send
 any information automatically. Then you can access this method to
@@ -936,12 +923,12 @@ array - array of channels.
 =back
 
 E.g.: $vyc->info_ack("John", "made.up.host", "user", "1.2.3.4", 
-['#Main'], "");
+"autoanswer", ('#Main'));
 
 =cut
 
 sub info_ack { # {{{
-	my ($self, $to, $host, $ip, $user, $chans, $aa) = @_;
+	my ($self, $to, $host, $ip, $user, $aa, $chans) = @_;
 	$host = $self->{host} unless $host;
 	$ip = $self->{localip} unless $ip;
 	$user = $ENV{USER} unless $user;
@@ -1579,9 +1566,8 @@ Returns: "topic", $chan, $topic
 		) {
 			$self->{'channels'}{$chan}{'topic'} = $topic;
 			$self->debug("Topic for $chan ["
-				.gethostbyaddr($self->{'listen'}->peeraddr, AF_INET)." "
-				.$self->{'listen'}->peerhost."]:\n"
-				.$self->{'channels'}{$chan}{'topic'}, $buffer); 
+				. $self->{'listen'}->peerhost . "]:\n"
+				. $self->{'channels'}{$chan}{'topic'}, $buffer); 
 			@re = ("topicsend", $chan, $topic);
 		}
 		else {
@@ -1633,7 +1619,7 @@ Returns: "info", $from
 
 =head4 info request acknowledgment
 
-Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
+Returns: "info_ack", $from, $host, $user, $ip, $aa, @chans
 
 =cut
 
@@ -1645,13 +1631,13 @@ Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
 			# Remove #'s from end of string.
 			$chans =~ s/^#*(.+?)#*$/$1/;
 			my @chans = split(/#/, $chans);
-			$chans = undef;
-			foreach (@chans) { $chans .= "#$_,"; }
-			chop $chans;
+			my @channels;
+			$aa = '' unless $aa;
+			push @channels, '#'.$_ for @chans;
 			$self->debug("F: recognise, T: info_ack, From: $from, Host: $host, "
 				. "User: $user, Ip: $ip, Chans: $chans, AA: $aa"
 				, $buffer); 
-			@re = ("info_ack", $from, $host, $user, $ip, $chans, $aa);
+			@re = ("info_ack", $from, $host, $user, $ip, $aa, @channels);
 		}
 	} # }}}
 			
