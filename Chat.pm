@@ -18,7 +18,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.71';
+our $VERSION = '0.72';
 
 # Prints debug messages
 sub debug { # {{{
@@ -58,8 +58,8 @@ sub i_am_here { # {{{
 	my $str = header()."1".$updater."\0".$self->{'nick'}."\0"
 	  .$self->{'users'}{$self->{'nick'}}{'status'}
 	  .$self->{'users'}{$self->{'nick'}}{'active'};
-	$self->{'send'}->send($str);
-	$self->debug("F: i_am_here(), To: $updater, Nick: $self->{'nick'}, "
+	$self->usend($str, $updater);
+	$self->debug("F: i_am_here, To: $updater, Nick: $self->{'nick'}, "
 		. "Status: "
 		. $self->num2status($self->{'users'}{$self->{'nick'}}{'status'}).", "
 		. "Active: "
@@ -74,7 +74,7 @@ sub msg_ack { # {{{
 		.$self->{'nick'}."\0".$self->{'users'}{$self->{'nick'}}{'gender'}
 		.$self->{'users'}{$self->{'nick'}}{'autoanswer'}."\0";
 	$self->usend($str, $to);
-	$self->debug("F: msg_ack(), To: $to", $str);
+	$self->debug("F: msg_ack, To: $to", $str);
 } # }}}
 
 # Sends topic to person if it is set for channel.
@@ -85,7 +85,7 @@ sub send_topic { # {{{
 	my $topic = $self->{'channels'}->{$chan}{'topic'};
 	my $str = header()."C".$to."\0".$chan."\0".$topic."\0";
 	$self->{'send'}->send($str);
-	$self->debug("F: send_topic(), To: $to, Chan: $chan, Topic: \"$topic\""
+	$self->debug("F: send_topic, To: $to, Chan: $chan, Topic: \"$topic\""
 		, $str);
 	}
 } # }}}
@@ -106,6 +106,20 @@ sub change_in_channels { # {{{
 	}
 } # }}}
 
+# Changes in users list
+sub change_in_users { # {{{
+	my ($self, $oldnick, $newnick) = @_;
+	$self->{'users'}{$newnick} = $self->{'users'}{$oldnick};
+	delete $self->{'users'}{$oldnick};
+} # }}}
+
+# Changes in all
+sub change_in_all { # {{{
+	my ($self, $oldnick, $newnick) = @_;
+	$self->change_in_users($oldnick, $newnick);
+	$self->change_in_channels($oldnick, $newnick);
+} # }}}
+
 # Deletes channel from user.
 sub delete_from_channel { # {{{
 	my ($self, $nick, $chan) = @_;
@@ -123,12 +137,13 @@ sub delete_from_channel { # {{{
 			last if $last;
 		}
 	}
-	$self->debug("F: delete_from_channel(), Nick: $nick, Chan: $chan");
+	$self->debug("F: delete_from_channel, Nick: $nick, Chan: $chan");
 } # }}}
 
 # Adds channel record.
 sub add_to_channel { # {{{
 	my ($self, $nick, $chan) = @_;
+	$self->debug("F: add_to_channel, Nick: $nick, Chan: $chan");
 	push @{$self->{channels}{$chan}{users}}, $nick;
 } # }}}
 
@@ -157,7 +172,7 @@ sub beep_ack { # {{{
 	my ($self, $to) = @_;
   my $str = header()."H1".$to."\0".$self->{send}."\0";
 	$self->{send}->send($str);
-	$self->debug("F: beep_ack(), To: $to", $str);
+	$self->debug("F: beep_ack, To: $to", $str);
 } # }}}
 
 # Gives out out channel list.
@@ -173,20 +188,26 @@ sub here_ack { # {{{
 		.$self->{'users'}{$self->{'nick'}}{'active'};
 	$self->{'send'}->send($str);
 	$self->debug("Sent here to $to at $chan with state "
-		.num2active($self->{'users'}{$self->{'nick'}}{'active'}), $str);
+		.$self->num2active($self->{'users'}{$self->{'nick'}}{'active'}), $str);
 } # }}}
 
 # Sends string thru unicast
 sub usend { # {{{
 	my ($self, $str, $to) = @_;
-	if (defined $self->{users}{$to}{ip}) {
+
+	if ($self->{use_unicast} && defined $self->{users}{$to}{ip}) {
 		my $iaddr = inet_aton($self->{users}{$to}{ip});
 		my $paddr = sockaddr_in($self->{port}, $iaddr);
 		$self->debug("F: usend, To: $to, Ip: $self->{users}{$to}{ip}", $str);
 		$self->{usend}->send($str, 0, $paddr);
 	}
-	elsif ($self->{uc_fail} == 1) {
-		$self->debug("F: usend, To: $to, Warn: IP unknown, A: Sending bcast.");
+	elsif (!$self->{use_unicast} || $self->{uc_fail} == 1) {
+		if ($self->{uc_fail} == 1) {
+			$self->debug("F: usend, To: $to, Warn: IP unknown, A: Sending bcast.");
+		}
+		else {
+			$self->debug("F: usend, To: $to, Warn: Sending bcast.");
+		}
 		$self->{send}->send($str);
 	}
 	else {
@@ -197,10 +218,16 @@ sub usend { # {{{
 # Sends string thru usend to people on some chan
 sub usend_chan { # {{{
 	my ($self, $str, $chan) = @_;
-	$self->debug("F: usend_chan, Chan: $chan");
-	for (@{$self->{channels}{$chan}{users}}) {
-		$self->usend($str, $_);
-	}	
+	if ($self->{use_unicast}) {
+		$self->debug("F: usend_chan, Chan: $chan");
+		for (@{$self->{channels}{$chan}{users}}) {
+			$self->usend($str, $_);
+		}
+	}
+	else {
+		$self->debug("F: usend_chan, Chan: $chan, Warn: Sending bcast.");
+		$self->{send}->send($str);
+	}
 } # }}}
 
 
@@ -340,6 +367,9 @@ be warned in console. Also $vyc->{badip} variable will be set to 1.
 - toggles sending thru broadcast socket when unicast socket fails (ip cannot be
 found). Default: 1.
 
+=item use_unicast
+- toggles using unicast. Default: 0 'cause of buggy unicast code for now.
+
 =item coll_avoid
 - toggle nick collision evasion. If someone changes nick to your nickname 
 modules will prepend number. Default: 1.
@@ -362,6 +392,7 @@ sub new { # {{{
 	$self->{oldnick} = "";
 	$self->{port} = $args{port} || 8167;
 	$self->{debug} = $args{debug} || 0;
+	$self->{use_unicast} = $args{use_unicast} || 0;
 	$self->{uc_fail} = (defined $args{uc_fail}) ? $args{uc_fail} : 1;
 	$self->{coll_avoid} = (defined $args{coll_avoid}) ? $args{coll_avoid} : 1;
 	$self->{send_info} = (defined $args{send_info}) ? $args{send_info} : 1;
@@ -408,7 +439,7 @@ sub init_users { # {{{
 			'ip' => $self->{localip},
 		}
 	};
-	$self->debug("init_users(), Status: "
+	$self->debug("F: init_users, Status: "
 	. $self->num2status($tmpstatus). ", Active: "
 	. $self->num2active($tmpactive). ", Gender: "
 	. $tmpgender .", AA: $tmpaa.");
@@ -457,12 +488,8 @@ sub nick { # {{{
 		# In fact Windows clients even segfaults ;-)
 		$self->{'nick'} = (length($nick) > 20) ? substr($nick, 0, 20) : $nick;
 		
-		# We assign oldnick data structure here.
-		$self->{'users'}{$self->{'nick'}} = $self->{'users'}{$oldnick};
-		delete $self->{'users'}{$oldnick};
-
-		# Changing in channels
-		$self->change_in_channels($oldnick, $self->{nick});
+		# Changing structure
+		$self->change_in_all($oldnick, $self->{nick});
 		
 		# If we are connected to net announce nick change.
 		if (defined $self->{'send'} && $self->{init}) {
@@ -471,14 +498,14 @@ sub nick { # {{{
 			my $str = header()."3".$oldnick."\0".$self->{'nick'}."\0"
 			  .$self->{'users'}{$self->{'nick'}}{'gender'};
 			$self->{'send'}->send($str);
-			$self->debug("F: nick(), Old: $oldnick, New: $self->{'nick'}", $str);
+			$self->debug("F: nick, Old: $oldnick, New: $self->{'nick'}", $str);
 		}
 		else {
-			$self->debug("F: nick(), Warn: network off.");
+			$self->debug("F: nick, Warn: network off.");
 		}
 	}
 	else {
-		$self->debug("F: nick(), E: Same nicks.");
+		$self->debug("F: nick, E: Same nicks.");
 	}
 } # }}}
 
@@ -493,23 +520,23 @@ E.g.: $vyc->num2status(0) would return Available.
 sub num2status { # {{{
 	my ($self, $status) = @_;
 	if ($status == 0) {
-		$self->debug("F: num2status(), Status: Available");
+		$self->debug("F: num2status, Status: Available");
 		return "Available";
 	}
 	elsif ($status == 1) {
-		$self->debug("F: num2status(), Status: DND");
+		$self->debug("F: num2status, Status: DND");
 		return "DND";
 	}
 	elsif ($status == 2) {
-		$self->debug("F: num2status(), Status: Away");
+		$self->debug("F: num2status, Status: Away");
 		return "Away";
 	}
 	elsif ($status == 3) {
-		$self->debug("F: num2status(), Status: Offline");
+		$self->debug("F: num2status, Status: Offline");
 		return "Offline";
 	}
 	else {
-		$self->debug("F: num2status(), Status: Unknown");
+		$self->debug("F: num2status, Status: Unknown");
 		return "Unknown";
 	}
 } # }}}
@@ -525,15 +552,15 @@ E.g.: $vyc->num2active(1) would return Active.
 sub num2active { # {{{
 	my ($self, $status) = @_;
 	if ($status == 0) {
-		$self->debug("F: num2active(), Active: Inactive");
+		$self->debug("F: num2active, Active: Inactive");
 		return "Inactive"
 	}
 	elsif ($status == 1) {
-		$self->debug("F: num2active(), Active: Active");
+		$self->debug("F: num2active, Active: Active");
 		return "Active"
 	}
 	else {
-		$self->debug("F: num2active(), Active: Unknown");
+		$self->debug("F: num2active, Active: Unknown");
 		return "Unknown"
 	}
 } # }}}
@@ -656,10 +683,10 @@ sub join { # Join to channel {{{
 #		}
 		$self->add_to_channel($self->{nick}, $chan);
 		$self->{last_joined_chan} = $chan;
-		$self->debug("F: join(), Chan: $chan", $str);
+		$self->debug("F: join, Chan: $chan", $str);
 	}
 	else {
-		$self->debug("F: join(), Warn: already in $chan.");
+		$self->debug("F: join, Warn: already in $chan.");
 	}
 } # }}}
 
@@ -676,13 +703,18 @@ sub part { # {{{
 	if ($self->on_chan($self->{nick}, $chan)) {
 		my $str = header()."5".$self->{'nick'}."\0".$chan."\0"
 			.$self->{'users'}{$self->{'nick'}}{'gender'};
-		$self->usend_chan($str, $chan);
+		if ($chan eq '#Main') {
+			$self->{send}->send($str);
+		}
+		else {
+			$self->usend_chan($str, $chan);
+		}
 
 		$self->delete_from_channel($self->{nick}, $chan);
-		$self->debug("F: part(), Chan: $chan", $str);
+		$self->debug("F: part, Chan: $chan", $str);
 	}
 	else {
-		$self->debug("F: part(), Chan: $chan, Err: not in chan.");
+		$self->debug("F: part, Chan: $chan, Err: not in chan.");
 	}
 } # }}}
 
@@ -701,7 +733,7 @@ sub topic { # {{{
 	my $str = header()."B".$chan."\0".$topic.$signature."\0";
 	$self->{'channels'}{$chan}{'topic'} = $topic;
 	$self->usend_chan($str, $chan);
-	$self->debug("F: topic(), Chan: $chan, Topic: \"$topic\"", $str);
+	$self->debug("F: topic, Chan: $chan, Topic: \"$topic\"", $str);
 } # }}}
 
 
@@ -734,10 +766,10 @@ sub mass { # {{{
 		unless ($_ eq $self->{'nick'}) {
 			my $str = header()."E".$self->{'nick'}."\0".$_."\0".$msg."\0";
 			$self->usend($str, $_);
-			$self->debug("F: mass(), To: $_, Text: \"$msg\"", $str);
+			$self->debug("F: mass, To: $_, Text: \"$msg\"", $str);
 		}
 		else {
-			$self->debug("F: mass(), Warn: send to self.");
+			$self->debug("F: mass, Warn: send to self.");
 		}
 	}
 } # }}}
@@ -757,7 +789,7 @@ sub mass_to { # {{{
 	for (@to) {
 		my $str = header()."E".$self->{'nick'}."\0".$_."\0".$msg."\0";
 		$self->usend($str, $_);
-		$self->debug("F: mass_to(), To: $_, Text: \"$msg\"", $str);
+		$self->debug("F: mass_to, To: $_, Text: \"$msg\"", $str);
 	}
 } # }}}
 
@@ -787,7 +819,7 @@ sub status { # {{{
 			.$self->{'users'}{$self->{'nick'}}{'gender'}
 			.$self->{'users'}{$self->{'nick'}}{'autoanswer'}."\0";
 		$self->{'send'}->send($str);
-		$self->debug("F: status(), Status: "
+		$self->debug("F: status, Status: "
 			. $self->num2status($self->{'users'}{$self->{'nick'}}{'status'})
 			. ", AA: \"$self->{'users'}{$self->{'nick'}}{'autoanswer'}\"."
 			, $str);
@@ -808,7 +840,7 @@ sub active { # {{{
 	my $str = header()."M".$self->{'nick'}."\0"
 		.$self->{'users'}{$self->{'nick'}}{'active'};
 	$self->{'send'}->send($str);
-	$self->debug("F: active(), Active: "
+	$self->debug("F: active, Active: "
 		. $self->num2active($self->{'users'}{$self->{'nick'}}{'active'}), $str);
 } # }}}
 
@@ -824,7 +856,7 @@ sub beep { # {{{
 	my ($self, $to) = @_;
 	my $str = header()."H0".$to."\0".$self->{send}."\0";
 	$self->usend($str, $to);
-	$self->debug("F: beep(), To: $to", $str);
+	$self->debug("F: beep, To: $to", $str);
 } # }}}
 
 =head2 chanlist()
@@ -839,7 +871,7 @@ sub chanlist { # {{{
 	my ($self) = @_;
 	my $str = header()."N".$self->{nick}."\0";
 	$self->{send}->send($str);
-	$self->debug("F: chanlist()", $str);
+	$self->debug("F: chanlist", $str);
 } # }}}
 
 =head2 info($user)
@@ -854,7 +886,7 @@ sub info { # {{{
 	my ($self, $to) = @_;
 	my $str = header()."F".$to."\0".$self->{'nick'}."\0";
 	$self->usend($str, $to);
-	$self->debug("F: info(), To: $to", $str);
+	$self->debug("F: info, To: $to", $str);
 } # }}}
 
 =head2 info_ack($user)
@@ -931,7 +963,7 @@ sub info_ack { # {{{
 		 ."\0". $user ."\0". $ip ."\0". $chans ."#\0"
 	   . $aa ."\0";
 	$self->usend($str, $to);
-	$self->debug("F: info_ack(), To: $to, Nick: $self->{'nick'}, Host: $host "
+	$self->debug("F: info_ack, To: $to, Nick: $self->{'nick'}, Host: $host "
 		. "User: $user, IP: $ip, Chans: $chans, AA: $aa", $str);
 } # }}}
 
@@ -950,10 +982,10 @@ sub pjoin { # {{{
 			. $self->{users}{$self->{nick}}{gender};
 		$self->usend($str, $to);
 		$self->add_to_private($to);
-		$self->debug("F: pjoin(), To: $to", $str);
+		$self->debug("F: pjoin, To: $to", $str);
 	}
 	else {
-		$self->debug("F: pjoin(), To: $to, Err: Already in.");
+		$self->debug("F: pjoin, To: $to, Err: Already in.");
 	}
 } # }}}
 
@@ -972,10 +1004,10 @@ sub ppart { # {{{
 			. $self->{users}{$self->{nick}}{gender};
 		$self->usend($str, $to);
 		$self->delete_from_private($to);
-		$self->debug("F: ppart(), To: $to", $str);
+		$self->debug("F: ppart, To: $to", $str);
 	}
 	else {
-		$self->debug("F: ppart(), To: $to, Err: Already out.");
+		$self->debug("F: ppart, To: $to, Err: Already out.");
 	}
 } # }}}
 
@@ -994,10 +1026,10 @@ sub pchat { # {{{
 		my $str = header() ."J2". $self->{nick} ."\0". $to ."\0"
 			. $text ."\0";
 		$self->usend($str, $to);
-		$self->debug("F: pchat(), To: $to", $str);
+		$self->debug("F: pchat, To: $to", $str);
 	}
 	else {
-		$self->debug("F: pchat(), To: $to, Err: not in chat.");
+		$self->debug("F: pchat, To: $to, Err: not in chat.");
 	}
 } # }}}
 
@@ -1016,10 +1048,10 @@ sub pme { # {{{
 		my $str = header() ."J3". $self->{nick} ."\0". $to ."\0"
 			. $text ."\0";
 		$self->usend($str, $to);
-		$self->debug("F: pme(), To: $to", $str);
+		$self->debug("F: pme, To: $to", $str);
 	}
 	else {
-		$self->debug("F: pme(), To: $to, Err: not in chat.");
+		$self->debug("F: pme, To: $to, Err: not in chat.");
 	}
 } # }}}
 
@@ -1088,7 +1120,9 @@ E.g.: $vyc->shutdown();
 
 sub shutdown { # {{{
 	my $self = shift;
-	$self->part($_) for $self->get_chans($self->{nick});
+	for ($self->get_chans($self->{nick})) {
+		$self->part($_) 
+	}
 	# Close sockets
 	$self->{'listen'}->close();
 	$self->{'send'}->close();
@@ -1123,11 +1157,11 @@ sub on_chan { # {{{
 		defined $self->{channels}{$chan} &&
 		grep(/^\Q$nick\E$/, @{$self->{channels}{$chan}{users}})
 	) {
-		$self->debug("F: on_chan(), Nick: $nick, Chan: $chan, Status: 1");
+		$self->debug("F: on_chan, Nick: $nick, Chan: $chan, Status: 1");
 		return 1;
 	}
 	else {
-		$self->debug("F: on_chan(), Nick: $nick, Chan: $chan, Status: 0");
+		$self->debug("F: on_chan, Nick: $nick, Chan: $chan, Status: 0");
 		return 0;
 	}
 } # }}}
@@ -1143,11 +1177,11 @@ E.g.: $vyc->on_priv("John") would return 1 if you were in chat with John.
 sub on_priv { # {{{
 	my ($self, $to) = @_;
 	if (grep(/^\Q$to\E$/, @{$self->{users}{$self->{nick}}{chats}})) {
-		$self->debug("F: on_priv(), To: $to, Status: 1");
+		$self->debug("F: on_priv, To: $to, Status: 1");
 		return 1;
 	}
 	else {
-		$self->debug("F: on_priv(), To: $to, Status: 0");
+		$self->debug("F: on_priv, To: $to, Status: 0");
 		return 0;
 	}
 } # }}}
@@ -1163,11 +1197,11 @@ E.g.: $vyc->on_userlist("Dude") would return 1 if Dude would be logged in.
 sub on_userlist { # {{{
 	my ($self, $user) = @_;
 	if (grep(/^\Q$user\E$/, keys %{$self->{'users'}})) {
-		$self->debug("F: on_userlist(), User: $user, Status: 1");
+		$self->debug("F: on_userlist, User: $user, Status: 1");
 		return 1
 	}
 	else {
-		$self->debug("F: on_userlist(), User: $user, Status: 0");
+		$self->debug("F: on_userlist, User: $user, Status: 0");
 		return 0;
 	}
 } # }}}
@@ -1189,7 +1223,7 @@ sub get_chans { # {{{
 			$chans .= $_;
 		}		
 	}
-	$self->debug("F: get_chans(), Nick: $nick, Chans: $chans");
+	$self->debug("F: get_chans, Nick: $nick, Chans: $chans");
 	return @chans;	
 } # }}}
 
@@ -1253,7 +1287,7 @@ Returns: "who", $updater.
 	# Who's here?
 	if ($pkttype eq '0') { # {{{
 		my $updater = $args[0];
-		$self->debug("F: recognise(), Type: who, From: $updater", $buffer); 
+		$self->debug("F: recognise, Type: who, From: $updater", $buffer); 
 		$self->i_am_here($updater);
 		@re = ("who", $updater);
 	} # }}}
@@ -1274,14 +1308,15 @@ Returns: "who_ack", $from, $status, $active
 			(!$self->on_userlist($responder))
 		)
 		) {
-			$self->debug("F: recognise(), T: who_ack, From: $responder, Status: "
+			$self->debug("F: recognise, T: who_ack, From: $responder, Status: "
 				. $self->num2status($status) .", Active: "
 				. $self->num2active($active)
 				, $buffer); 
 			$self->{users}{$responder}{status} = $status;
 			$self->{users}{$responder}{active} = $active;
 			$self->{users}{$responder}{ip} = $ip;
-			$self->add_to_channel($updater, '#Main') unless $self->on_chan('#Main');
+			$self->add_to_channel($responder, '#Main') unless
+				$self->on_chan($responder, '#Main');
 			@re = ("who_ack", $responder, $status, $active);
 		}
 	} # }}}
@@ -1331,9 +1366,9 @@ Returns: "nick", $oldnick, $newnick
 					}
 				}
 			}
-			$self->{'users'}{$newnick} = $self->{'users'}{$oldnick};
-			delete $self->{'users'}{$oldnick};
-			$self->debug("F: recognise(), T: nick, From: $oldnick, To: $newnick"
+			$self->change_in_all($oldnick, $newnick);
+			
+			$self->debug("F: recognise, T: nick, From: $oldnick, To: $newnick"
 				, $buffer); 
 			@re = ("nick", $oldnick, $newnick);
 		}
@@ -1348,33 +1383,30 @@ Returns: "join", $from, $chan, $status
 	elsif ($pkttype eq '4') { # {{{
 		my ($who, $chan, $status) = @args;
 		$status = substr $status, 0, 1;
-		if ($ip ne $self->{localip}) {
-			if ($self->{last_joined_chan} eq $chan) {
-				$self->{last_joined_chan} = '';
-			}
-			elsif ($who eq $self->{nick}) {
-				for (0..99) {
-					my $nick = $self->{nick};
-					$nick =~ s/^\[\d*\]//;
-					unless ($self->on_userlist("[$_]".$nick)) {
-						$self->nick("[$_]".$nick);
-						last;
-					}
+		if ($self->{last_joined_chan} eq $chan) {
+			$self->{last_joined_chan} = '';
+		}
+		elsif ($who eq $self->{nick}) {
+			for (0..99) {
+				my $nick = $self->{nick};
+				$nick =~ s/^\[\d*\]//;
+				unless ($self->on_userlist("[$_]".$nick)) {
+					$self->nick("[$_]".$nick);
+					last;
 				}
 			}
-			if ($self->on_chan($chan)) {
-				$self->debug("F: recognise(), T: join, From: $who, "
-					. "Chan: $chan, Status: "
-					. $self->num2status($status)
-					, $buffer); 
+		}
+		if ($self->on_chan($chan)) {
+			$self->debug("F: recognise, T: join, From: $who, "
+				. "Chan: $chan, Status: "
+				. $self->num2status($status)
+				, $buffer); 
 
-				$self->send_topic($who, $chan);
-				$self->{users}{$who}{status} = $status;
-				$self->{users}{$who}{active} = 1;
-				$self->{users}{$who}{ip} = $ip;
-				$self->add_to_channel($who, $chan);
-				@re = ("join", $who, $chan, $status);
-			}
+			$self->send_topic($who, $chan);
+			$self->{users}{$who}{status} = $status;
+			$self->{users}{$who}{active} = 1;
+			$self->{users}{$who}{ip} = $ip;
+			@re = ("join", $who, $chan, $status);
 		}
 	} # }}}
 
@@ -1388,7 +1420,7 @@ Returns: "part", $who, $chan
 		my ($who, $chan) = @args;
 		if ($who ne $self->{nick} && $self->on_chan($who, $chan)) {
 			$self->delete_from_channel($who, $chan);
-			$self->debug("F: recognise(), T: part, From: $who, Chan: $chan", $buffer);
+			$self->debug("F: recognise, T: part, From: $who, Chan: $chan", $buffer);
 			@re = ("part", $who, $chan);
 		}
 	} # }}}
@@ -1405,7 +1437,7 @@ Returns: "msg", $from, $text
 		if ($self->on_userlist($from)) {
 			$text = '' unless $text;
 			if ($to eq $self->{'nick'}) {
-				$self->debug("F: recognise(), T: msg, From: $from, Msg: \"$text\""
+				$self->debug("F: recognise, T: msg, From: $from, Msg: \"$text\""
 					, $buffer); 
 				$self->msg_ack($from);
 				@re = ("msg",$from,$text);
@@ -1592,7 +1624,7 @@ Returns: "info", $from
 		my ($forwho,$from) = @args;
 		#$buffer =~ /^\x58.{9}F(.+?)\0(.+?)\0+$/;
 		if ($forwho =~ $self->{'nick'}) {
-			$self->debug("F: recognise(), T: info, From: $from", $buffer); 
+			$self->debug("F: recognise, T: info, From: $from", $buffer); 
 			$self->info_ack($from) if $self->{send_info};
 			@re = ("info", $from);
 		}
@@ -1616,7 +1648,7 @@ Returns: "info_ack", $from, $host, $user, $ip, $chans, $aa
 			$chans = undef;
 			foreach (@chans) { $chans .= "#$_,"; }
 			chop $chans;
-			$self->debug("F: recognise(), T: info_ack, From: $from, Host: $host, "
+			$self->debug("F: recognise, T: info_ack, From: $from, Host: $host, "
 				. "User: $user, Ip: $ip, Chans: $chans, AA: $aa"
 				, $buffer); 
 			@re = ("info_ack", $from, $host, $user, $ip, $chans, $aa);
@@ -1643,11 +1675,11 @@ Returns: "beep_ack", $from, $gender
 		my ($from, $gender) = @args;
 		if ($to eq $self->{nick}) {
 			if ($pkttype eq '0') {
-				$self->debug("F: recognise(), Type: beep, From: $from", $buffer);
+				$self->debug("F: recognise, Type: beep, From: $from", $buffer);
 				@re = ("beep", $from);
 			}
 			elsif ($pkttype eq '1') {
-				$self->debug("F: recognise(), Type: beep_ack, From: $from", $buffer);
+				$self->debug("F: recognise, Type: beep_ack, From: $from", $buffer);
 				@re = ("beep_ack", $from, $gender);
 			}
 		}
@@ -1695,21 +1727,21 @@ Returns: "pme", $from, $text
 		if ($to eq $self->{nick}) {
 			if ($subtype eq '0') {
 				$self->add_to_private($from);
-				$self->debug("F: recognise(), T: pjoin, From: $from", $buffer);
+				$self->debug("F: recognise, T: pjoin, From: $from", $buffer);
 				@re = ("pjoin", $from);
 			}
 			elsif ($subtype eq '1') {
 				$self->delete_from_private($from);
-				$self->debug("F: recognise(), T: ppart, From: $from", $buffer);
+				$self->debug("F: recognise, T: ppart, From: $from", $buffer);
 				@re = ("ppart", $from);
 			}
 			elsif ($subtype eq '2') {
-				$self->debug("F: recognise(), T: pchat, From: $from, Text: \"$text\""
+				$self->debug("F: recognise, T: pchat, From: $from, Text: \"$text\""
 					, $buffer);
 				@re = ("pchat", $from, $text);
 			}
 			elsif ($subtype eq '3') {
-				$self->debug("F: recognise(), T: pme, From: $from, Text: \"$text\""
+				$self->debug("F: recognise, T: pme, From: $from, Text: \"$text\""
 					, $buffer);
 				@re = ("pme", $from, $text);
 			}
@@ -1745,7 +1777,7 @@ Returns: "here_ack", $from, $chan, $active
 		# {{{
 		my ($to, $chan, $from, $active) = @args;
 		if ($to eq $self->{nick}) {
-			$self->debug("F: recognise(), T:here_ack,From: $from, Chan $chan"
+			$self->debug("F: recognise, T:here_ack,From: $from, Chan $chan"
 				. ", status " .$self->num2status($active), $buffer);
 			@re = ("here_ack", $from, $chan, $active);
 		}
