@@ -16,7 +16,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-our $VERSION = '0.61';
+our $VERSION = '0.62';
 
 # Prints debug messages
 sub debug { # {{{
@@ -857,7 +857,7 @@ sub info_ack { # {{{
 	$aa = $self->{users}{$self->{nick}}{autoanswer} unless $aa;
 
 	if (!defined $chans || $chans eq '1') {
-		$chans = join '', $self->get_chans($self->{nick});
+		$chans = CORE::join '', $self->get_chans($self->{nick});
 	}
 	elsif ($chans eq '0') {
 		$chans = '#Main';

@@ -6,8 +6,8 @@
 
 # change 'tests => 1' to 'tests => last_test_to_print';
 
-#use Test::More tests => 34;
-use Test::More 'no_plan';
+use Test::More tests => 41;
+#use Test::More 'no_plan';
 BEGIN { use_ok('Net::Vypress::Chat') };
 
 #########################
@@ -17,8 +17,8 @@ BEGIN { use_ok('Net::Vypress::Chat') };
 
 my $vyc = Net::Vypress::Chat->new(
 	'send_info' => '0',
-#	'localip' => '127.0.0.1',
-	'localip' => '192.168.0.1',
+	'localip' => '127.0.0.1',
+#	'localip' => '192.168.0.1',
 #	'debug' => 1
 );
 ok(defined $vyc, '$vyc is an object');
